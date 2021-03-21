@@ -3,8 +3,6 @@ package consume
 
 import (
 	"reflect"
-
-	"github.com/keep94/common"
 )
 
 const (
@@ -129,19 +127,32 @@ type MapFilterer interface {
 	// value gets overwritten with each call to MapFilter.
 	MapFilter(ptr interface{}) interface{}
 
-	private()
+	addClones(result *[]MapFilterer)
+	size() int
 }
 
 // NewMapFilterer creates a MapFilterer from multiple functions like the ones
 // passed to MapFilter chained together. The returned MapFilterer can be
-// passed as a parameter to MapFilter or to NewMapFilterer.
+// passed as a parameter to MapFilter or to NewMapFilterer. The returned
+// MapFilterer works independently from any MapFilterers passed to
+// NewMapFilterer.
 func NewMapFilterer(funcs ...interface{}) MapFilterer {
-	result := make([]MapFilterer, len(funcs))
-	for i := range result {
-		result[i] = newMapFilterer(funcs[i])
+	resultSize := 0
+	for _, f := range funcs {
+		resultSize += mfSize(f)
 	}
-	return common.Join(
-		result, sliceMapFilterer(nil), nilMapFilterer{}).(MapFilterer)
+	result := make([]MapFilterer, 0, resultSize)
+	for _, f := range funcs {
+		mfAddClones(f, &result)
+	}
+	switch len(result) {
+	case 0:
+		return nilMapFilterer{}
+	case 1:
+		return result[0]
+	default:
+		return sliceMapFilterer(result)
+	}
 }
 
 // MapFilter returns a Consumer that passes only filtered and mapped
@@ -157,19 +168,15 @@ func NewMapFilterer(funcs ...interface{}) MapFilterer {
 // This second argument is what gets passed to the next function in funcs
 // or to consumer if it is the last function in funcs.
 //
-// The NewMapFilterer function can return a MapFilterer  which represents zero
+// The NewMapFilterer function can return a MapFilterer which represents zero
 // or more of these functions chained together. MapFilterer instances can be
 // passed as parameters to MapFilter just like the functions mentioned above.
+// Any passed MapFilterer instance is unaffected by the use of the returned
+// Consumer.
 func MapFilter(consumer Consumer, funcs ...interface{}) Consumer {
 	mapFilters := NewMapFilterer(funcs...)
-	if _, ok := mapFilters.(nilMapFilterer); ok {
+	if mapFilters.size() == 0 {
 		return consumer
-	}
-	if mf, ok := consumer.(*mapFilterConsumer); ok {
-		return &mapFilterConsumer{
-			Consumer:   mf.Consumer,
-			mapFilters: NewMapFilterer(mapFilters, mf.mapFilters),
-		}
 	}
 	return &mapFilterConsumer{
 		Consumer:   consumer,
@@ -342,10 +349,22 @@ func (n nilConsumer) Consume(ptr interface{}) {
 	panic(kCantConsume)
 }
 
-func newMapFilterer(f interface{}) MapFilterer {
+func mfSize(f interface{}) int {
 	if mf, ok := f.(MapFilterer); ok {
-		return mf
+		return mf.size()
 	}
+	return 1
+}
+
+func mfAddClones(f interface{}, result *[]MapFilterer) {
+	if mf, ok := f.(MapFilterer); ok {
+		mf.addClones(result)
+		return
+	}
+	*result = append(*result, newMapFilterer(f))
+}
+
+func newMapFilterer(f interface{}) MapFilterer {
 	fvalue := reflect.ValueOf(f)
 	ftype := reflect.TypeOf(f)
 	validateFuncType(ftype)
@@ -355,11 +374,13 @@ func newMapFilterer(f interface{}) MapFilterer {
 			value: fvalue,
 		}
 	} else if numIn == 2 {
-		spareValue := reflect.New(ftype.In(1).Elem())
+		resultType := ftype.In(1).Elem()
+		resultPtr := reflect.New(resultType)
 		return &mapper{
-			value:   fvalue,
-			result:  spareValue,
-			iresult: spareValue.Interface(),
+			value:      fvalue,
+			resultType: resultType,
+			resultPtr:  resultPtr,
+			iresultPtr: resultPtr.Interface(),
 		}
 	} else {
 		panic("Function parameter must take 1 or 2 parameters")
@@ -396,24 +417,38 @@ func (f *filterer) MapFilter(ptr interface{}) interface{} {
 	return nil
 }
 
-func (f *filterer) private() {
+func (f *filterer) size() int { return 1 }
+
+func (f *filterer) addClones(result *[]MapFilterer) {
+	*result = append(*result, f)
 }
 
 type mapper struct {
-	value   reflect.Value
-	result  reflect.Value
-	iresult interface{}
+	value      reflect.Value
+	resultType reflect.Type
+	resultPtr  reflect.Value
+	iresultPtr interface{}
 }
 
 func (m *mapper) MapFilter(ptr interface{}) interface{} {
-	params := [...]reflect.Value{reflect.ValueOf(ptr), m.result}
+	params := [...]reflect.Value{reflect.ValueOf(ptr), m.resultPtr}
 	if m.value.Call(params[:])[0].Bool() {
-		return m.iresult
+		return m.iresultPtr
 	}
 	return nil
 }
 
-func (m *mapper) private() {
+func (m *mapper) size() int { return 1 }
+
+func (m *mapper) addClones(result *[]MapFilterer) {
+	*result = append(*result, m.clone())
+}
+
+func (m *mapper) clone() *mapper {
+	result := *m
+	result.resultPtr = reflect.New(result.resultType)
+	result.iresultPtr = result.resultPtr.Interface()
+	return &result
 }
 
 type sliceMapFilterer []MapFilterer
@@ -428,18 +463,23 @@ func (s sliceMapFilterer) MapFilter(ptr interface{}) interface{} {
 	return ptr
 }
 
-func (s sliceMapFilterer) private() {
+func (s sliceMapFilterer) size() int { return len(s) }
+
+func (s sliceMapFilterer) addClones(result *[]MapFilterer) {
+	for _, mf := range s {
+		mf.addClones(result)
+	}
 }
 
-type nilMapFilterer struct {
-}
+type nilMapFilterer struct{}
 
 func (n nilMapFilterer) MapFilter(ptr interface{}) interface{} {
 	return ptr
 }
 
-func (n nilMapFilterer) private() {
-}
+func (n nilMapFilterer) size() int { return 0 }
+
+func (n nilMapFilterer) addClones(result *[]MapFilterer) {}
 
 type mapFilterConsumer struct {
 	Consumer
