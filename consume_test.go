@@ -16,6 +16,15 @@ func TestNil(t *testing.T) {
 	assert.Panics(func() { consumer.Consume(new(int)) })
 }
 
+func TestMustCanConsume(t *testing.T) {
+	assert := assert.New(t)
+	nilConsumer := consume.Nil()
+	assert.Panics(func() { consume.MustCanConsume(nilConsumer) })
+	var x []int
+	consumer := consume.AppendTo(&x)
+	assert.NotPanics(func() { consume.MustCanConsume(consumer) })
+}
+
 func TestPageConsumer(t *testing.T) {
 	assert := assert.New(t)
 	var arr []int
