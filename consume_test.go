@@ -25,6 +25,21 @@ func TestMustCanConsume(t *testing.T) {
 	assert.NotPanics(func() { consume.MustCanConsume(consumer) })
 }
 
+func TestConsumerFunc(t *testing.T) {
+	assert := assert.New(t)
+	var x int
+	consumer := consume.ConsumerFunc(func(ptr interface{}) {
+		p := ptr.(*int)
+		x += *p
+	})
+	i := 4
+	consumer.Consume(&i)
+	i = 5
+	consumer.Consume(&i)
+	assert.Equal(9, x)
+	assert.True(consumer.CanConsume())
+}
+
 func TestPageConsumer(t *testing.T) {
 	assert := assert.New(t)
 	var arr []int
