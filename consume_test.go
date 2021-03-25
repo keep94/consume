@@ -184,6 +184,26 @@ func TestMapFilter(t *testing.T) {
 	assert.Equal([]string{"0", "30", "60", "90", "120", "150"}, zeroTo150By30)
 }
 
+func TestNewMapFiltererPanics(t *testing.T) {
+	assert := assert.New(t)
+	assert.Panics(func() { consume.NewMapFilterer(3) })
+	assert.Panics(func() {
+		consume.NewMapFilterer(func() {})
+	})
+	assert.Panics(func() {
+		consume.NewMapFilterer(func() int { return 4 })
+	})
+	assert.Panics(func() {
+		consume.NewMapFilterer(func(x int) bool { return true })
+	})
+	assert.Panics(func() {
+		consume.NewMapFilterer(func(ptr *int) {})
+	})
+	assert.Panics(func() {
+		consume.NewMapFilterer(func(x, y, z *string) bool { return true })
+	})
+}
+
 func ExampleMapFilter() {
 	var evens []string
 	consumer := consume.MapFilter(
