@@ -93,6 +93,7 @@ func TestPageConsumerPanics(t *testing.T) {
 	assert.Panics(func() { consume.Page(0, -1, &arr, &morePages) })
 	assert.Panics(func() { consume.Page(0, 0, &arr, &morePages) })
 	assert.Panics(func() { consume.Page(-1, 5, &arr, &morePages) })
+	assert.Panics(func() { consume.Page(0, 5, "not_a_slice", &morePages) })
 }
 
 func TestComposeUseIndividual(t *testing.T) {

@@ -203,26 +203,27 @@ func Page(
 	if itemsPerPage <= 0 {
 		panic("itemsPerPage must be positive")
 	}
-	ensureCapacity(aValueSlicePointer, itemsPerPage+1)
-	truncateTo(aValueSlicePointer, 0)
+	aSliceValue := sliceValueFromP(aValueSlicePointer, false)
+	ensureCapacity(aSliceValue, itemsPerPage+1)
+	truncateTo(aSliceValue, 0)
 	consumer := AppendTo(aValueSlicePointer)
 	consumer = Slice(
 		consumer,
 		zeroBasedPageNo*itemsPerPage,
 		(zeroBasedPageNo+1)*itemsPerPage+1)
 	return &pageConsumer{
-		Consumer:           consumer,
-		itemsPerPage:       itemsPerPage,
-		aValueSlicePointer: aValueSlicePointer,
-		morePages:          morePages}
+		Consumer:     consumer,
+		itemsPerPage: itemsPerPage,
+		aSliceValue:  aSliceValue,
+		morePages:    morePages}
 }
 
 type pageConsumer struct {
 	Consumer
-	itemsPerPage       int
-	aValueSlicePointer interface{}
-	morePages          *bool
-	finalized          bool
+	itemsPerPage int
+	aSliceValue  reflect.Value
+	morePages    *bool
+	finalized    bool
 }
 
 func (p *pageConsumer) Finalize() {
@@ -231,30 +232,23 @@ func (p *pageConsumer) Finalize() {
 	}
 	p.finalized = true
 	p.Consumer = nilConsumer{}
-	if lengthOfSlicePtr(p.aValueSlicePointer) == p.itemsPerPage+1 {
+	if p.aSliceValue.Len() == p.itemsPerPage+1 {
 		*p.morePages = true
-		truncateTo(p.aValueSlicePointer, p.itemsPerPage)
+		truncateTo(p.aSliceValue, p.itemsPerPage)
 	} else {
 		*p.morePages = false
 	}
 }
 
-func ensureCapacity(aSlicePointer interface{}, capacity int) {
-	value := reflect.ValueOf(aSlicePointer).Elem()
-	if value.Cap() < capacity {
-		typ := value.Type()
-		value.Set(reflect.MakeSlice(typ, 0, capacity))
+func ensureCapacity(aSliceValue reflect.Value, capacity int) {
+	if aSliceValue.Cap() < capacity {
+		typ := aSliceValue.Type()
+		aSliceValue.Set(reflect.MakeSlice(typ, 0, capacity))
 	}
 }
 
-func truncateTo(aSlicePointer interface{}, newLength int) {
-	value := reflect.ValueOf(aSlicePointer).Elem()
-	value.Set(value.Slice(0, newLength))
-}
-
-func lengthOfSlicePtr(aSlicePointer interface{}) int {
-	value := reflect.ValueOf(aSlicePointer).Elem()
-	return value.Len()
+func truncateTo(aSliceValue reflect.Value, newLength int) {
+	aSliceValue.Set(aSliceValue.Slice(0, newLength))
 }
 
 type sliceConsumer struct {
