@@ -189,12 +189,20 @@ func MapFilter(consumer Consumer, funcs ...interface{}) Consumer {
 // If there are more pages after page fetched, Page sets morePages to true;
 // otherwise, it sets morePages to false. Note that the values stored at
 // aValueSlicePointer and morePages are undefined until caller calls
-// Finalize() on returned ConsumeFinalizer.
+// Finalize() on returned ConsumeFinalizer. Page panics if zeroBasedPageNo
+// is negative, if itemsPerPage <= 0, or if aValueSlicePointer is not a
+// pointer to a slice.
 func Page(
 	zeroBasedPageNo int,
 	itemsPerPage int,
 	aValueSlicePointer interface{},
 	morePages *bool) ConsumeFinalizer {
+	if zeroBasedPageNo < 0 {
+		panic("zeroBasedPageNo must be non-negative")
+	}
+	if itemsPerPage <= 0 {
+		panic("itemsPerPage must be positive")
+	}
 	ensureCapacity(aValueSlicePointer, itemsPerPage+1)
 	truncateTo(aValueSlicePointer, 0)
 	consumer := AppendTo(aValueSlicePointer)

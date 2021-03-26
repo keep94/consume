@@ -19,7 +19,7 @@ func TestComposeOne(t *testing.T) {
 	assert.Same(c, Compose(c))
 }
 
-func TestMapFilterWithNil(t *testing.T) {
+func TestMapFilterWithNone(t *testing.T) {
 	assert := assert.New(t)
 	var ints []int
 	c := AppendTo(&ints)
@@ -31,7 +31,7 @@ func TestNilMapFilterer(t *testing.T) {
 	assert.Equal(nilMapFilterer{}, NewMapFilterer())
 }
 
-func TestSingleMapFilterer(t *testing.T) {
+func TestSingleFilterer(t *testing.T) {
 	assert := assert.New(t)
 	filter := NewMapFilterer(
 		func(ptr *int) bool {

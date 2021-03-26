@@ -86,6 +86,15 @@ func TestPageConsumer(t *testing.T) {
 	assert.Panics(func() { pager.Consume(new(int)) })
 }
 
+func TestPageConsumerPanics(t *testing.T) {
+	assert := assert.New(t)
+	var arr []int
+	var morePages bool
+	assert.Panics(func() { consume.Page(0, -1, &arr, &morePages) })
+	assert.Panics(func() { consume.Page(0, 0, &arr, &morePages) })
+	assert.Panics(func() { consume.Page(-1, 5, &arr, &morePages) })
+}
+
 func TestComposeUseIndividual(t *testing.T) {
 	assert := assert.New(t)
 	var strs []string
@@ -158,6 +167,20 @@ func TestSlice(t *testing.T) {
 	var zeroToFive []int
 	feedInts(t, consume.Slice(consume.AppendTo(&zeroToFive), 0, 5))
 	assert.Equal([]int{0, 1, 2, 3, 4}, zeroToFive)
+}
+
+func TestSliceNegative(t *testing.T) {
+	assert := assert.New(t)
+	var zeroToFive []int
+	feedInts(t, consume.Slice(consume.AppendTo(&zeroToFive), -1, 5))
+	assert.Equal([]int{0, 1, 2, 3, 4}, zeroToFive)
+	var none []int
+	feedInts(t, consume.Slice(consume.AppendTo(&none), 5, -1))
+	feedInts(t, consume.Slice(consume.AppendTo(&none), -3, -1))
+	feedInts(t, consume.Slice(consume.AppendTo(&none), -1, -3))
+	feedInts(t, consume.Slice(consume.AppendTo(&none), -2, 0))
+	feedInts(t, consume.Slice(consume.AppendTo(&none), 0, -2))
+	assert.Empty(none)
 }
 
 func TestFilter(t *testing.T) {
