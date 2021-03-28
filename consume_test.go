@@ -255,6 +255,13 @@ func TestNewMapFiltererPanics(t *testing.T) {
 	})
 }
 
+func TestNilMapFilterer(t *testing.T) {
+	assert := assert.New(t)
+	var s string
+	mf := consume.NewMapFilterer()
+	assert.Same(&s, mf.MapFilter(&s))
+}
+
 func TestAppendToPanics(t *testing.T) {
 	assert := assert.New(t)
 	assert.Panics(func() { consume.AppendTo("not_a_slice") })
