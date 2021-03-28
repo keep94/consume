@@ -252,6 +252,25 @@ func TestNewMapFiltererPanics(t *testing.T) {
 	})
 }
 
+func TestAppendToPanics(t *testing.T) {
+	assert := assert.New(t)
+	assert.Panics(func() { consume.AppendTo("not_a_slice") })
+	var strs []string
+	assert.Panics(func() { consume.AppendTo(strs) })
+	var x int
+	assert.Panics(func() { consume.AppendTo(&x) })
+}
+
+func TestApppendPtrsToPanics(t *testing.T) {
+	assert := assert.New(t)
+	assert.Panics(func() { consume.AppendPtrsTo("not_a_slice") })
+	var strs []string
+	assert.Panics(func() { consume.AppendPtrsTo(strs) })
+	assert.Panics(func() { consume.AppendPtrsTo(&strs) })
+	var x int
+	assert.Panics(func() { consume.AppendPtrsTo(&x) })
+}
+
 func ExampleMapFilter() {
 	var evens []string
 	consumer := consume.MapFilter(
