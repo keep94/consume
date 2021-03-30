@@ -111,7 +111,7 @@ func Compose(consumers ...Consumer) Consumer {
 // of returned consumer returns false if the CanConsume() method of the
 // underlying consumer returns false or if the returned consumer has consumed
 // end values. Note that if end <= start, the underlying consumer will never
-// get any values.
+// get any values. A negative start or end is treated as 0.
 func Slice(consumer Consumer, start, end int) Consumer {
 	return &sliceConsumer{consumer: consumer, start: start, end: end}
 }
