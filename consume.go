@@ -184,6 +184,20 @@ func MapFilter(consumer Consumer, funcs ...interface{}) Consumer {
 	}
 }
 
+// TakeWhile works like MapFilter except that returned Consumer only
+// accepts values until one is filtered out. Once returned Consumer filters
+// out a value, its CanConsume() method always returns false.
+func TakeWhile(consumer Consumer, funcs ...interface{}) Consumer {
+	mapFilters := NewMapFilterer(funcs...)
+	if mapFilters.size() == 0 {
+		return consumer
+	}
+	return &takeWhileConsumer{
+		consumer:   consumer,
+		mapFilters: mapFilters,
+	}
+}
+
 // Page returns a consumer that does pagination. The items in page fetched
 // get stored in the slice pointed to by aValueSlicePointer.
 // If there are more pages after page fetched, Page sets morePages to true;
@@ -495,4 +509,24 @@ func (m *mapFilterConsumer) Consume(ptr interface{}) {
 		return
 	}
 	m.Consumer.Consume(ptr)
+}
+
+type takeWhileConsumer struct {
+	consumer   Consumer
+	mapFilters MapFilterer
+	done       bool
+}
+
+func (t *takeWhileConsumer) CanConsume() bool {
+	return t.consumer.CanConsume() && !t.done
+}
+
+func (t *takeWhileConsumer) Consume(ptr interface{}) {
+	MustCanConsume(t)
+	ptr = t.mapFilters.MapFilter(ptr)
+	if ptr == nil {
+		t.done = true
+		return
+	}
+	t.consumer.Consume(ptr)
 }

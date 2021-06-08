@@ -211,6 +211,29 @@ func TestMap(t *testing.T) {
 	assert.Equal([]string{"0", "2", "4", "6", "8", "10"}, zeroTo10By2)
 }
 
+func TestDropWhile(t *testing.T) {
+	assert := assert.New(t)
+	var zeroTo50By10 []int
+	feedInts(t, consume.MapFilter(
+		consume.TakeWhile(
+			consume.AppendTo(&zeroTo50By10),
+			func(ptr *int) bool { return *ptr < 50 }),
+		func(src, dest *int) bool {
+			*dest = *src * 10
+			return true
+		}))
+	assert.Equal([]int{0, 10, 20, 30, 40}, zeroTo50By10)
+}
+
+func TestDropWhileInnerFinishes(t *testing.T) {
+	assert := assert.New(t)
+	var zeroTo3 []int
+	feedInts(t, consume.TakeWhile(
+		consume.Slice(consume.AppendTo(&zeroTo3), 0, 3),
+		func(ptr *int) bool { return *ptr < 10 }))
+	assert.Equal([]int{0, 1, 2}, zeroTo3)
+}
+
 func TestMapFilter(t *testing.T) {
 	assert := assert.New(t)
 	var zeroTo150By30 []string

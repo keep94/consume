@@ -26,6 +26,13 @@ func TestMapFilterWithNone(t *testing.T) {
 	assert.Same(c, MapFilter(c, NewMapFilterer()))
 }
 
+func TestTakeWhileWithNone(t *testing.T) {
+	assert := assert.New(t)
+	var ints []int
+	c := AppendTo(&ints)
+	assert.Same(c, TakeWhile(c, NewMapFilterer()))
+}
+
 func TestNilMapFilterer(t *testing.T) {
 	assert := assert.New(t)
 	assert.Equal(nilMapFilterer{}, NewMapFilterer())
