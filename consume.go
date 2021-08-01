@@ -10,8 +10,7 @@ const (
 	kParamMustReturnBool = "Parameter must return bool"
 )
 
-// Consumer consumes values. The values that Consumer consumes must
-// support assignment.
+// Consumer consumes values.
 type Consumer interface {
 
 	// CanConsume returns true if this instance can consume a value.
@@ -33,7 +32,8 @@ type ConsumeFinalizer interface {
 	Finalize()
 }
 
-// ConsumerFunc can always consume.
+// The ConsumerFunc type is an adapter to allow the use of an ordinary function
+// as a Consumer. ConsumerFunc can always consume.
 type ConsumerFunc func(ptr interface{})
 
 // Consume invokes c, this function.
@@ -123,8 +123,9 @@ type MapFilterer interface {
 	// MapFilter applies the chained filter and map functions to what ptr
 	// points to while leaving it unchanged. MapFilter returns nil if ptr
 	// should be filtered out; returns ptr itself; or returns a pointer to
-	// a new value. If MapFilter returns a pointer to a new value, the new
-	// value gets overwritten with each call to MapFilter.
+	// a mapped value. If MapFilter returns a pointer to a mapped value,
+	// it gets overwritten with each call to MapFilter because such values
+	// are stored within this MapFilterer to avoid memory allocations.
 	MapFilter(ptr interface{}) interface{}
 
 	addClones(result *[]MapFilterer)
@@ -134,8 +135,9 @@ type MapFilterer interface {
 // NewMapFilterer creates a MapFilterer from multiple functions like the ones
 // passed to MapFilter chained together. The returned MapFilterer can be
 // passed as a parameter to MapFilter or to NewMapFilterer. The returned
-// MapFilterer works independently from any MapFilterers passed to
-// NewMapFilterer.
+// MapFilterer contains copies of any MapFilterers passed in. Therefore,
+// the returned MapFilterer and any passed in MapFilterers can safely be used
+// at the same time.
 func NewMapFilterer(funcs ...interface{}) MapFilterer {
 	resultSize := 0
 	for _, f := range funcs {
@@ -171,8 +173,9 @@ func NewMapFilterer(funcs ...interface{}) MapFilterer {
 // The NewMapFilterer function can return a MapFilterer which represents zero
 // or more of these functions chained together. MapFilterer instances can be
 // passed as parameters to MapFilter just like the functions mentioned above.
-// Any passed MapFilterer instance is unaffected by the use of the returned
-// Consumer.
+// The MapFilter function takes a copy of any passed in MapFilterer instance,
+// so any passed MapFilterer instance can safely be used at the same time as
+// the returned Consumer.
 func MapFilter(consumer Consumer, funcs ...interface{}) Consumer {
 	mapFilters := NewMapFilterer(funcs...)
 	if mapFilters.size() == 0 {
@@ -199,10 +202,11 @@ func TakeWhile(consumer Consumer, funcs ...interface{}) Consumer {
 }
 
 // Page returns a consumer that does pagination. The items in page fetched
-// get stored in the slice pointed to by aValueSlicePointer.
-// If there are more pages after page fetched, Page sets morePages to true;
-// otherwise, it sets morePages to false. Note that the values stored at
-// aValueSlicePointer and morePages are undefined until caller calls
+// get stored in the slice pointed to by aValueSlicePointer. Note that
+// aValueSlicePointer is a pointer to a slice of values that support
+// assignment. If there are more pages after page fetched, Page sets morePages
+// to true; otherwise, it sets morePages to false. Note that the values stored
+// at aValueSlicePointer and morePages are undefined until caller calls
 // Finalize() on returned ConsumeFinalizer. Page panics if zeroBasedPageNo
 // is negative, if itemsPerPage <= 0, or if aValueSlicePointer is not a
 // pointer to a slice.
