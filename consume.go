@@ -28,7 +28,7 @@ type ConsumeFinalizer interface {
 
 	// Caller calls Finalize after it is done passing values to this consumer.
 	// Once caller calls Finalize(), CanConsume() returns false and Consume()
-	// panics.
+	// panics. Calls to Finalize are idempotent.
 	Finalize()
 }
 
@@ -58,6 +58,26 @@ func MustCanConsume(c Consumer) {
 // consumer panics.
 func Nil() Consumer {
 	return nilConsumer{}
+}
+
+// AppendToSaveMemory works like AppendTo but saves on allocs. AppendTo does
+// O(N) allocs where N is the number of items being appended.
+// AppendToSaveMemory does only O(log N) worst case. It accomplishes this
+// by not modifying the dimensions of the slice with every append. Because
+// of this, caller must call Finalize() on the returned consumer when
+// appending is finished so that it can adjust the dimensions of the slice
+// one last time to fit the items appended. Not calling Finalize() results in
+// a slice that has extra elements at the end.
+func AppendToSaveMemory(aValueSlicePointer interface{}) ConsumeFinalizer {
+	aSliceValue := sliceValueFromP(aValueSlicePointer, false)
+	length := aSliceValue.Len()
+	if aSliceValue.Cap() < 4 {
+		truncateTo(aSliceValue, 4)
+	} else {
+		truncateTo(aSliceValue, aSliceValue.Cap())
+	}
+	return &appendSaveMemoryConsumer{
+		buffer: aSliceValue, length: length}
 }
 
 // AppendTo returns a Consumer that appends consumed values to the slice
@@ -116,8 +136,8 @@ func Slice(consumer Consumer, start, end int) Consumer {
 	return &sliceConsumer{consumer: consumer, start: start, end: end}
 }
 
-// Interface MapFilterer represents zero or more functions like the ones
-// passed to MapFilter chained together.
+// MapFilterer represents zero or more functions like the ones passed
+// to MapFilter chained together.
 type MapFilterer interface {
 
 	// MapFilter applies the chained filter and map functions to what ptr
@@ -130,6 +150,27 @@ type MapFilterer interface {
 
 	addClones(result *[]MapFilterer)
 	size() int
+}
+
+// Mapper maps a value to a new value.
+type Mapper interface {
+
+	// Map takes a pointer to a value and returns a pointer to the
+	// mapped value. Map returns the same pointer every time, but the
+	// value that pointer points to changes.
+	Map(ptr interface{}) interface{}
+
+	// Clone clones this Mapper. The Map method of the cloned Mapper
+	// returns a different pointer from the original.
+	Clone() Mapper
+}
+
+// Filterer filters a value
+type Filterer interface {
+
+	// Filter returns true if the value ptr points to should be included
+	// or false otherwise.
+	Filter(ptr interface{}) bool
 }
 
 // NewMapFilterer creates a MapFilterer from multiple functions like the ones
@@ -169,6 +210,10 @@ func NewMapFilterer(funcs ...interface{}) MapFilterer {
 // first argument unchanged, but use it to set their second argument.
 // This second argument is what gets passed to the next function in funcs
 // or to consumer if it is the last function in funcs.
+//
+// MapFilter can also take Mapper or Filterer interfaces instead of raw
+// functions. These interfaces exist because calling a raw function via
+// reflection costs two allocations for each value consumed.
 //
 // The NewMapFilterer function can return a MapFilterer which represents zero
 // or more of these functions chained together. MapFilterer instances can be
@@ -222,15 +267,15 @@ func Page(
 		panic("itemsPerPage must be positive")
 	}
 	aSliceValue := sliceValueFromP(aValueSlicePointer, false)
-	ensureCapacity(aSliceValue, itemsPerPage+1)
-	truncateTo(aSliceValue, 0)
-	consumer := AppendTo(aValueSlicePointer)
-	consumer = Slice(
-		consumer,
+	ensureEmptyWithCapacity(aSliceValue, itemsPerPage+1)
+	cf := AppendToSaveMemory(aValueSlicePointer)
+	consumer := Slice(
+		cf,
 		zeroBasedPageNo*itemsPerPage,
 		(zeroBasedPageNo+1)*itemsPerPage+1)
 	return &pageConsumer{
 		Consumer:     consumer,
+		cf:           cf,
 		itemsPerPage: itemsPerPage,
 		aSliceValue:  aSliceValue,
 		morePages:    morePages}
@@ -238,6 +283,7 @@ func Page(
 
 type pageConsumer struct {
 	Consumer
+	cf           ConsumeFinalizer
 	itemsPerPage int
 	aSliceValue  reflect.Value
 	morePages    *bool
@@ -249,6 +295,7 @@ func (p *pageConsumer) Finalize() {
 		return
 	}
 	p.finalized = true
+	p.cf.Finalize()
 	p.Consumer = nilConsumer{}
 	if p.aSliceValue.Len() == p.itemsPerPage+1 {
 		*p.morePages = true
@@ -258,15 +305,23 @@ func (p *pageConsumer) Finalize() {
 	}
 }
 
-func ensureCapacity(aSliceValue reflect.Value, capacity int) {
+func ensureEmptyWithCapacity(aSliceValue reflect.Value, capacity int) {
 	if aSliceValue.Cap() < capacity {
 		typ := aSliceValue.Type()
 		aSliceValue.Set(reflect.MakeSlice(typ, 0, capacity))
+	} else {
+		truncateTo(aSliceValue, 0)
 	}
 }
 
 func truncateTo(aSliceValue reflect.Value, newLength int) {
-	aSliceValue.Set(aSliceValue.Slice(0, newLength))
+	if newLength <= aSliceValue.Cap() {
+		aSliceValue.Set(aSliceValue.Slice(0, newLength))
+		return
+	}
+	newSlice := reflect.MakeSlice(aSliceValue.Type(), newLength, newLength)
+	reflect.Copy(newSlice, aSliceValue)
+	aSliceValue.Set(newSlice)
 }
 
 type sliceConsumer struct {
@@ -338,6 +393,35 @@ func (a *appendConsumer) Consume(ptr interface{}) {
 	}
 }
 
+type appendSaveMemoryConsumer struct {
+	buffer    reflect.Value
+	length    int
+	finalized bool
+}
+
+func (a *appendSaveMemoryConsumer) CanConsume() bool {
+	return !a.finalized
+}
+
+func (a *appendSaveMemoryConsumer) Consume(ptr interface{}) {
+	if a.finalized {
+		panic(kCantConsume)
+	}
+	if a.length == a.buffer.Len() {
+		truncateTo(a.buffer, 2*a.length)
+	}
+	a.buffer.Index(a.length).Set(reflect.ValueOf(ptr).Elem())
+	a.length++
+}
+
+func (a *appendSaveMemoryConsumer) Finalize() {
+	if a.finalized {
+		return
+	}
+	a.finalized = true
+	truncateTo(a.buffer, a.length)
+}
+
 func sliceValueFromP(
 	aSlicePointer interface{}, sliceOfPtrs bool) reflect.Value {
 	resultPtr := reflect.ValueOf(aSlicePointer)
@@ -379,6 +463,16 @@ func mfSize(f interface{}) int {
 func mfAddClones(f interface{}, result *[]MapFilterer) {
 	if mf, ok := f.(MapFilterer); ok {
 		mf.addClones(result)
+		return
+	}
+	if aMapper, ok := f.(Mapper); ok {
+		*result = append(
+			*result, &mapperInterfaceWrapper{value: aMapper.Clone()})
+		return
+	}
+	if aFilterer, ok := f.(Filterer); ok {
+		*result = append(
+			*result, &filtererInterfaceWrapper{value: aFilterer})
 		return
 	}
 	*result = append(*result, newMapFilterer(f))
@@ -423,6 +517,41 @@ func validateFuncType(ftype reflect.Type) {
 			panic("Function parameter must accept pointer arguments")
 		}
 	}
+}
+
+type filtererInterfaceWrapper struct {
+	value Filterer
+}
+
+func (f *filtererInterfaceWrapper) MapFilter(ptr interface{}) interface{} {
+	if f.value.Filter(ptr) {
+		return ptr
+	}
+	return nil
+}
+
+func (f *filtererInterfaceWrapper) size() int { return 1 }
+
+func (f *filtererInterfaceWrapper) addClones(result *[]MapFilterer) {
+	*result = append(*result, f)
+}
+
+type mapperInterfaceWrapper struct {
+	value Mapper
+}
+
+func (m *mapperInterfaceWrapper) MapFilter(ptr interface{}) interface{} {
+	return m.value.Map(ptr)
+}
+
+func (m *mapperInterfaceWrapper) size() int { return 1 }
+
+func (m *mapperInterfaceWrapper) addClones(result *[]MapFilterer) {
+	*result = append(*result, m.clone())
+}
+
+func (m *mapperInterfaceWrapper) clone() *mapperInterfaceWrapper {
+	return &mapperInterfaceWrapper{value: m.value.Clone()}
 }
 
 type filterer struct {

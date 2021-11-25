@@ -9,6 +9,27 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type person struct {
+	Name string
+	Age  int
+}
+
+const (
+	mark = iota
+	stoney
+	matt
+	dillon
+	beth
+)
+
+var people = []person{
+	{Name: "Mark", Age: 50},
+	{Name: "Stoney", Age: 49},
+	{Name: "Matt", Age: 46},
+	{Name: "Dillon", Age: 19},
+	{Name: "Beth", Age: 54},
+}
+
 func TestNil(t *testing.T) {
 	assert := assert.New(t)
 	consumer := consume.Nil()
@@ -304,6 +325,191 @@ func TestApppendPtrsToPanics(t *testing.T) {
 	assert.Panics(func() { consume.AppendPtrsTo(&x) })
 }
 
+func TestAppendToSaveMemorySimple(t *testing.T) {
+	assert := assert.New(t)
+	var values []int
+	cf := consume.AppendToSaveMemory(&values)
+	feedInts(t, consume.Slice(cf, 0, 10))
+	cf.Finalize()
+	cf.Finalize() // idempotent
+	assert.Equal(values, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+}
+
+func TestAppendToSaveMemoryCapacity(t *testing.T) {
+	assert := assert.New(t)
+	values := make([]int, 0, 10)
+	cf := consume.AppendToSaveMemory(&values)
+	feedInts(t, consume.Slice(cf, 0, 10))
+	cf.Finalize()
+	assert.Equal(values, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+	assert.Equal(10, cap(values))
+}
+
+func TestAppendToSaveMemoryPrevValues(t *testing.T) {
+	assert := assert.New(t)
+	values := []int{101, 103, 107, 109, 113}
+	cf := consume.AppendToSaveMemory(&values)
+	feedInts(t, consume.Slice(cf, 0, 10))
+	cf.Finalize()
+	assert.Equal(
+		values,
+		[]int{101, 103, 107, 109, 113, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+}
+
+func TestAppendToSaveMemoryPrevValuesWithCapacity(t *testing.T) {
+	assert := assert.New(t)
+	values := make([]int, 0, 15)
+	values = append(values, 101, 103, 107, 109, 113)
+	cf := consume.AppendToSaveMemory(&values)
+	feedInts(t, consume.Slice(cf, 0, 10))
+	cf.Finalize()
+	assert.Equal(
+		values,
+		[]int{101, 103, 107, 109, 113, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+	assert.Equal(15, cap(values))
+}
+
+func TestAppendToSaveMemoryAfterFinalize(t *testing.T) {
+	assert := assert.New(t)
+	var values []int
+	cf := consume.AppendToSaveMemory(&values)
+	cf.Finalize()
+	assert.False(cf.CanConsume())
+	var x int
+	assert.Panics(func() { cf.Consume(&x) })
+}
+
+func TestMapper(t *testing.T) {
+	assert := assert.New(t)
+	var result []person
+	consumer := consume.MapFilter(
+		consume.Slice(consume.AppendTo(&result), 0, 1),
+		newPersonMapper(func(src, dest *person) bool {
+			if src.Name != "Beth" {
+				return false
+			}
+			*dest = *src
+			dest.Age *= 2
+			return true
+		}),
+	)
+	writePeopleInLoop(people[:], consumer)
+	assert.Equal([]person{{Name: "Beth", Age: 108}}, result)
+}
+
+func TestFilterer(t *testing.T) {
+	assert := assert.New(t)
+	var result []person
+	mf := consume.NewMapFilterer(
+		newPersonFilterer(func(p *person) bool {
+			return p.Name == "Beth"
+		}),
+	)
+	consumer := consume.MapFilter(
+		consume.Slice(consume.AppendTo(&result), 0, 1), mf)
+	writePeopleInLoop(people[:], consumer)
+	assert.Equal([]person{{Name: "Beth", Age: 54}}, result)
+}
+
+func TestTrickyConsume(t *testing.T) {
+	assert := assert.New(t)
+	mf := consume.NewMapFilterer(
+		newPersonMapper(func(src, dest *person) bool {
+			*dest = *src
+			dest.Age *= 2
+			return true
+		}))
+	var x, y []person
+	consumer := consume.MapFilter(
+		consume.Compose(
+			consume.MapFilter(consume.AppendTo(&x), mf),
+			consume.AppendTo(&y),
+		),
+		mf,
+	)
+	consumer.Consume(&people[beth])
+	assert.Equal([]person{{Name: "Beth", Age: 216}}, x)
+	assert.Equal([]person{{Name: "Beth", Age: 108}}, y)
+}
+
+func BenchmarkAppendToSaveMemory(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var result []person
+		cf := consume.AppendToSaveMemory(&result)
+		writePeopleInLoop(people[:], consume.Slice(cf, 0, 1000))
+		cf.Finalize()
+	}
+}
+
+func BenchmarkAppendTo(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var result []person
+		consumer := consume.AppendTo(&result)
+		writePeopleInLoop(people[:], consume.Slice(consumer, 0, 1000))
+	}
+}
+
+func BenchmarkPagerMapper(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var result []person
+		var morePages bool
+		pager := consume.Page(17, 100, &result, &morePages)
+		writePeopleInLoop(
+			people[:],
+			consume.MapFilter(
+				pager,
+				newPersonMapper(func(src, dest *person) bool {
+					*dest = *src
+					dest.Age *= 2
+					return true
+				}),
+			),
+		)
+		pager.Finalize()
+	}
+}
+
+func BenchmarkPagerFilterer(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var result []person
+		var morePages bool
+		pager := consume.Page(17, 100, &result, &morePages)
+		writePeopleInLoop(
+			people[:],
+			consume.MapFilter(
+				pager,
+				newPersonFilterer(func(p *person) bool {
+					return p.Name == "Beth"
+				}),
+			),
+		)
+		pager.Finalize()
+	}
+}
+
+func BenchmarkPagerSimple(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		var result []person
+		var morePages bool
+		pager := consume.Page(17, 100, &result, &morePages)
+		writePeopleInLoop(
+			people[:],
+			consume.MapFilter(
+				pager,
+				func(p *person) bool {
+					return p.Name == "Beth"
+				},
+			),
+		)
+		pager.Finalize()
+	}
+}
+
 func ExampleMapFilter() {
 	var evens []string
 	consumer := consume.MapFilter(
@@ -337,4 +543,43 @@ func feedInts(t *testing.T, consumer consume.Consumer) {
 	assert.Panics(func() {
 		consumer.Consume(&idx)
 	})
+}
+
+type personFilterer func(ptr *person) bool
+
+func newPersonFilterer(f func(ptr *person) bool) consume.Filterer {
+	return personFilterer(f)
+}
+
+func (p personFilterer) Filter(ptr interface{}) bool {
+	return p(ptr.(*person))
+}
+
+type personMapper struct {
+	M      func(src, dest *person) bool
+	result person
+}
+
+func newPersonMapper(m func(src, dest *person) bool) consume.Mapper {
+	return &personMapper{M: m}
+}
+
+func (p *personMapper) Map(ptr interface{}) interface{} {
+	if p.M(ptr.(*person), &p.result) {
+		return &p.result
+	}
+	return nil
+}
+
+func (p *personMapper) Clone() consume.Mapper {
+	result := *p
+	return &result
+}
+
+func writePeopleInLoop(people []person, consumer consume.Consumer) {
+	index := 0
+	for consumer.CanConsume() {
+		consumer.Consume(&people[index%len(people)])
+		index++
+	}
 }
